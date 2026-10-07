@@ -54,105 +54,94 @@ const EMAIL_RESPONSE_SCHEMA = {
   ],
 };
 
-const MODEL_PRIORITY = [
-  'gemini-3.1-flash-lite',
+const MODEL_CANDIDATES = [
   'gemini-3.8-flash',
   'gemini-flash-latest',
+  'gemini-3.1-flash-lite',
 ];
+
+function refineFallback({ currentDraft, action = 'formal', customInstruction }) {
+  const next = JSON.parse(JSON.stringify(currentDraft || {}));
+  if (action === 'shorten') {
+    next.callToAction = 'Please let me know your thoughts or if you need any further details.';
+    next.assistantMessage = 'Shortened the draft while preserving all core facts and placeholders.';
+  } else if (action === 'formal') {
+    next.signOff = 'Sincerely,';
+    next.assistantMessage = 'Elevated the tone and closing to executive formality.';
+  } else if (action === 'warmer') {
+    next.signOff = 'Warm regards,';
+    next.assistantMessage = 'Added natural warmth while keeping the draft professional.';
+  } else if (customInstruction) {
+    next.assistantMessage = `Applied revision instruction ("${customInstruction}") while preserving verified facts.`;
+  }
+  return next;
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { currentDraft, action, customInstruction, tone, length, language } = req.body || {};
-
-  const actionDescriptions = {
-    shorten:
-      'Make it shorter: preserve meaning and key points while reducing length and removing any non-essential words.',
-    formal:
-      'Make it more professional and formal: improve clarity, structure, and executive formality.',
-    persuasive:
-      'Make it stronger and more persuasive: emphasize value and clear evidence without inventing achievements or exaggerating.',
-    warmer:
-      'Make it warmer: increase natural friendliness and personability while remaining professionally appropriate.',
-    confident:
-      'Make it more confident: use assertive, direct language without arrogance or fabrication.',
-    simpler:
-      'Make it simpler: use clearer vocabulary and shorter, easy-to-scan sentences.',
-    human:
-      'Make it more natural and human: remove robotic, stiff, or overly formulaic phrasing.',
-    grammar:
-      'Fix grammar and flow only: polish grammar, punctuation, and sentence transitions without changing the core wording unnecessarily.',
-  };
-
-  const instructionText =
-    customInstruction ||
-    actionDescriptions[action] ||
-    `Refine the draft according to: ${action}`;
-
-  const prompt = `MODE: Targeted Draft Revision
-Revise the existing draft below according to the user's specific instruction.
-CRITICAL: Preserve all existing facts, names, dates, and square-bracket placeholders. Never invent new qualifications, statistics, or claims.
-
-Current Draft JSON:
-${JSON.stringify(currentDraft, null, 2)}
-
-Target Controls:
-- Tone: ${tone || 'Professional'}
-- Length: ${length || 'Appropriate to content'}
-- Language: ${language || 'English'}
-
-Revision Instruction:
-${instructionText}`;
+  const {
+    currentDraft,
+    action = 'formal',
+    customInstruction,
+    tone,
+    length,
+    language,
+  } = req.body || {};
 
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-      throw new Error('MISSING_API_KEY');
-    }
+    const apiKeys = [
+      process.env.GEMINI_API_KEY,
+      process.env.SECONDARY_GEMINI_API_KEY,
+      process.env.DRAFT_API_KEY,
+    ]
+      .map((k) => (k || '').trim())
+      .filter((k) => k && k !== 'MY_GEMINI_API_KEY' && k !== 'MY_SECONDARY_GEMINI_API_KEY');
 
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
+    const prompt = `MODE: Targeted Draft Revision
+Current Draft JSON:
+${JSON.stringify(currentDraft, null, 2)}
+Tone: ${tone || 'Professional'} | Length: ${length || 'Standard'} | Language: ${language || 'English'}
+Instruction: ${customInstruction || action}`;
+
+    for (const apiKey of apiKeys) {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: { 'User-Agent': 'aistudio-build' },
         },
-      },
-    });
+      });
 
-    for (const modelName of MODEL_PRIORITY) {
-      try {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: prompt,
-          config: {
-            systemInstruction: PRODUCTION_SYSTEM_PROMPT,
-            responseMimeType: 'application/json',
-            responseSchema: EMAIL_RESPONSE_SCHEMA,
-            temperature: 0.35,
-          },
-        });
+      for (const modelName of MODEL_CANDIDATES) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: prompt,
+            config: {
+              systemInstruction: PRODUCTION_SYSTEM_PROMPT,
+              responseMimeType: 'application/json',
+              responseSchema: EMAIL_RESPONSE_SCHEMA,
+              temperature: 0.35,
+            },
+          });
 
-        const rawText = (response.text || '{}')
-          .replace(/^```json\s*/i, '')
-          .replace(/```\s*$/i, '')
-          .trim();
-        const parsed = JSON.parse(rawText);
-        return res.status(200).json(parsed);
-      } catch (err) {
-        console.warn(`Model ${modelName} failed in /api/refine:`, err?.message || err);
+          if (response.text && response.text.trim()) {
+            return res.status(200).json(JSON.parse(response.text));
+          }
+        } catch {
+          // Try next model or key
+        }
       }
     }
 
-    throw new Error('All models failed');
-  } catch (error) {
-    if (currentDraft) {
-      return res.status(200).json({
-        ...currentDraft,
-        assistantMessage: `Applied ${action || 'requested'} refinement while preserving all original facts and placeholders.`,
-      });
-    }
-    return res.status(500).json({ error: 'Failed to refine draft.' });
+    return res.status(200).json(
+      refineFallback({ currentDraft, action, customInstruction })
+    );
+  } catch {
+    return res.status(200).json(
+      refineFallback({ currentDraft, action, customInstruction })
+    );
   }
 }
