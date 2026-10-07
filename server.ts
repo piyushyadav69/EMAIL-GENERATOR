@@ -4,6 +4,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
+import {
+  composeStructuredDraft,
+  refineStructuredDraftLocally,
+} from './src/lib/mailComposerEngine.ts';
 
 dotenv.config();
 
@@ -50,119 +54,39 @@ Convert the user's information into a polished, professional communication that:
 
 3. INFORMATION-GATHERING & MISSING INFORMATION RULE
 Before drafting, determine whether the request contains enough information to produce a useful result.
-- If critical information is completely missing (for example, the user hasn't stated any purpose at all, or asks "write an email" with zero context), set status to "needs_clarification" and ask concise adaptive clarification questions tailored to the communication type. Do not overwhelm the user with a long questionnaire.
+- If critical information is completely missing (for example, the user hasn't stated any purpose at all, or asks "write an email" with zero context), set status to "needs_clarification" and ask concise adaptive clarification questions tailored to the communication type.
 - If the core purpose is clear and only non-critical details are missing (such as recipient name, company name, exact dates, phone number, email address), proceed with the draft (status: "complete") and use square-bracket placeholders such as:
   [Recipient Name], [Company Name], [Job Title], [Insert Date], [Your Name], [Phone Number], [Email Address], [Manager Name], [Duration], [Last Working Day].
-- Never fabricate missing information or silently guess these values.
-
-4. ADAPTIVE QUESTIONING PRIORITIES
-Ask only what is relevant when clarification is needed or suggest optional enhancements:
-- Job Applications: Job title, company, job description, relevant experience, skills, education, achievements, availability, why interested.
-- Leave Requests: Leave dates, reason (if user wants to disclose), duration, work handover information.
-- Resignation: Position, company, intended last working day, notice period, optional reason, appreciation message.
-- Cold Emails: Recipient, company, reason for contacting, desired outcome, relevant background/value proposition.
-- Follow-Ups: Previous interaction, original request, date of previous communication, desired next step.
-
-5. WRITING PRINCIPLES & PERSONALIZATION
-- Clarity: Straightforward language that is easy to understand.
-- Professionalism: Maintain appropriate professional etiquette.
-- Specificity: Use the user's actual information rather than generic statements. Avoid generic clichés like "I am writing to express my interest in your esteemed organization." Prefer specific language grounded in user inputs.
-- Conciseness: Remove unnecessary words, repetition, clichés, and filler.
-- Persuasion: Communicate value through relevant evidence rather than exaggerated claims.
-- Natural Language: Sound human and authentic rather than robotic or overly formulaic.
-- Action Orientation: Make the requested next step clear.
-- Accuracy & Safety: Never fabricate qualifications, employment history, academic achievements, relationships, fake references, fake statistics, company policies, or dates. If asked to exaggerate or create false info, explain briefly in integrityNote that you strengthened the wording while keeping it truthful.
-
-6. OUTPUT STRUCTURE MODES
-- Standard Email / Correspondence:
-  * 2-3 specific, short, professional, non-clickbait Subject Line options.
-  * Professional salutation (e.g., "Dear [Recipient Name]," or "Dear Hiring Manager,").
-  * Opening paragraph immediately establishing why the user is writing, relevant context, and purpose.
-  * Core message / value proposition in short paragraphs with logical progression.
-  * Call to action with a clear next step.
-  * Professional sign-off ("Best regards,", "Sincerely,", etc.) and signature block.
-- Cover Letter Mode:
-  * Professional opening, position and company, relevant experience/background, key skills and achievements, why interested & strong fit, closing and call to action. Do not simply repeat a resume; prioritize relevance and evidence.
-- Formal Application Mode:
-  * Formal salutation, clear statement of purpose, relevant background, supporting details, specific request, respectful formal closing.
-
-7. TONE & LENGTH ENGINE
-- Adapt strictly to requested tone: Formal, Professional, Warm, Enthusiastic, Persuasive, Direct, Apologetic, Urgent. Default to Professional, warm, and concise if unspecified.
-- Respect requested length:
-  * Short message: ~50–120 words
-  * Standard email: ~100–250 words
-  * Cover letter: ~250–450 words
-  * Formal application: minimum length necessary to communicate effectively.
-  Never pad with fluff merely to reach a word count.
-
-8. REWRITE & TRANSLATION MODES
-- In Rewrite/Improve mode: Preserve original facts and intent. Improve grammar, vocabulary, flow, structure, professionalism, clarity, tone, and conciseness without introducing new claims.
-- In Translation mode: Preserve meaning, intent, and appropriate formality; adapt idioms naturally; never add facts that were not present.`;
+- Never fabricate missing information or silently guess these values.`;
 
 const EMAIL_RESPONSE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
-    status: {
-      type: Type.STRING,
-      description:
-        'Set to "complete" when a usable draft is generated (using [Placeholders] for non-critical missing info). Set to "needs_clarification" ONLY when the request lacks enough core purpose/context to write a meaningful draft.',
-    },
-    assistantMessage: {
-      type: Type.STRING,
-      description:
-        'A brief, helpful 1-2 sentence message from the assistant. If status is needs_clarification, greet briefly and explain what critical context is needed. If complete, briefly note how the draft was tailored or if any truthfulness guardrails were applied.',
-    },
+    status: { type: Type.STRING },
+    assistantMessage: { type: Type.STRING },
     clarificationQuestions: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description:
-        'If status is needs_clarification (or if 1-2 optional high-impact details could make the draft even stronger), list concise, communication-type-specific questions here.',
     },
     subjectOptions: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description:
-        '2 to 3 clear, specific, professional subject line options. No clickbait.',
     },
-    salutation: {
-      type: Type.STRING,
-      description: 'Professional salutation, e.g., "Dear [Recipient Name],"',
-    },
-    opening: {
-      type: Type.STRING,
-      description:
-        'Opening paragraph immediately establishing purpose and relevant context.',
-    },
+    salutation: { type: Type.STRING },
+    opening: { type: Type.STRING },
     bodyParagraphs: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description:
-        'Core message, value proposition, or supporting paragraphs in logical order.',
     },
-    callToAction: {
-      type: Type.STRING,
-      description:
-        'Clear next step or closing paragraph (e.g., requesting an interview, confirmation, or meeting).',
-    },
-    signOff: {
-      type: Type.STRING,
-      description: 'Professional closing phrase, e.g., "Best regards," or "Sincerely,"',
-    },
-    signatureBlock: {
-      type: Type.STRING,
-      description:
-        'Multi-line signature block with sender name, role/qualification, phone, and email (using [Your Name], [Phone Number], etc. if not provided).',
-    },
+    callToAction: { type: Type.STRING },
+    signOff: { type: Type.STRING },
+    signatureBlock: { type: Type.STRING },
     placeholdersUsed: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description:
-        'Exact list of all square-bracket placeholders used anywhere in the subject or body, e.g. ["[Recipient Name]", "[Company Name]"].',
     },
     extractedFields: {
       type: Type.OBJECT,
-      description:
-        'Structured fields inferred or used from the user input so the UI can sync them.',
       properties: {
         communicationType: { type: Type.STRING },
         recipientName: { type: Type.STRING },
@@ -175,7 +99,6 @@ const EMAIL_RESPONSE_SCHEMA = {
     },
     qualityVerification: {
       type: Type.OBJECT,
-      description: 'Silent quality check results before returning the final draft.',
       properties: {
         toneApplied: { type: Type.STRING },
         structureMode: { type: Type.STRING },
@@ -199,19 +122,63 @@ const EMAIL_RESPONSE_SCHEMA = {
   ],
 };
 
-function getAiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY environment variable is not configured.');
-  }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
+const MODEL_CANDIDATES = [
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+  'gemini-3.1-flash-lite',
+];
+
+function getCandidateApiKeys(): string[] {
+  const keys = [
+    process.env.GEMINI_API_KEY,
+    process.env.SECONDARY_GEMINI_API_KEY,
+    process.env.DRAFT_API_KEY,
+  ]
+    .map((k) => (k || '').trim())
+    .filter((k) => k && k !== 'MY_GEMINI_API_KEY' && k !== 'MY_SECONDARY_GEMINI_API_KEY');
+  return Array.from(new Set(keys));
+}
+
+async function generateWithFallbackModels(
+  prompt: string,
+  temperature = 0.4
+): Promise<any | null> {
+  const apiKeys = getCandidateApiKeys();
+  for (const apiKey of apiKeys) {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
       },
-    },
-  });
+    });
+
+    for (const modelName of MODEL_CANDIDATES) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            systemInstruction: PRODUCTION_SYSTEM_PROMPT,
+            responseMimeType: 'application/json',
+            responseSchema: EMAIL_RESPONSE_SCHEMA,
+            temperature,
+          },
+        });
+
+        const rawText = response.text || '';
+        if (rawText.trim()) {
+          return JSON.parse(rawText);
+        }
+      } catch (err: any) {
+        console.warn(
+          `Model ${modelName} failed (${err?.status || err?.code || 'error'}), trying next candidate...`
+        );
+      }
+    }
+  }
+  return null;
 }
 
 async function startServer() {
@@ -221,17 +188,15 @@ async function startServer() {
   app.use(express.json({ limit: '2mb' }));
 
   app.post('/api/generate', async (req, res) => {
+    const {
+      mode = 'create',
+      formData = {},
+      quickPrompt = '',
+      conversationHistory = [],
+      clarificationAnswers = '',
+    } = req.body || {};
+
     try {
-      const {
-        mode,
-        formData,
-        quickPrompt,
-        conversationHistory,
-        clarificationAnswers,
-      } = req.body;
-
-      const ai = getAiClient();
-
       let userPromptText = '';
 
       if (mode === 'create') {
@@ -257,8 +222,7 @@ Structured Input Fields:
 - Desired Tone: ${formData.tone || 'Professional'}
 - Desired Length: ${formData.length || 'Standard Email (100–250 words)'}
 - Target Language: ${formData.language || 'English'}
-${clarificationAnswers ? `\nUser's Additional Clarification Answers:\n${clarificationAnswers}` : ''}
-`;
+${clarificationAnswers ? `\nUser's Additional Clarification Answers:\n${clarificationAnswers}` : ''}`;
       } else if (mode === 'improve') {
         userPromptText = `MODE: Improve / Rewrite / Translate Existing Draft
 Understand the intended meaning of the user's existing draft. Preserve all original facts and intent—never introduce new claims, fake statistics, or fabricated qualifications.
@@ -275,18 +239,17 @@ Desired Length: ${formData.length || 'Preserve appropriate length'}
 Target Language: ${formData.language || 'English'}
 Sender Name (if known): ${formData.senderName || ''}
 Recipient Name (if known): ${formData.recipientName || ''}
-Additional Instructions: ${formData.additionalInstructions || '(None)'}
-`;
+Additional Instructions: ${formData.additionalInstructions || '(None)'}`;
       } else {
-        // Quick Write / Conversational Mode
-        const historyStr = Array.isArray(conversationHistory) && conversationHistory.length > 0
-          ? conversationHistory
-              .map((m: { role: string; text: string }) => `${m.role.toUpperCase()}: ${m.text}`)
-              .join('\n\n')
-          : '';
+        const historyStr =
+          Array.isArray(conversationHistory) && conversationHistory.length > 0
+            ? conversationHistory
+                .map((m: { role: string; text: string }) => `${m.role.toUpperCase()}: ${m.text}`)
+                .join('\n\n')
+            : '';
 
         userPromptText = `MODE: Quick Write & Adaptive Conversation
-Sender Profile Context (if saved by user):
+Sender Profile Context:
 - Name: ${formData?.senderName || '(Use [Your Name] if not specified)'}
 - Role: ${formData?.senderRole || ''}
 - Phone: ${formData?.senderPhone || ''}
@@ -302,49 +265,62 @@ ${historyStr ? `Previous Conversation History:\n${historyStr}\n\n` : ''}Latest U
 """
 ${quickPrompt || ''}
 """
-${clarificationAnswers ? `\nUser's Answers to Clarification Questions:\n"""\n${clarificationAnswers}\n"""` : ''}
-
-Instructions:
-1. If the user's request has enough core purpose (e.g., "Write a leave request for 2 days because of a family function"), draft immediately (status: "complete") and use square-bracket placeholders ([Manager Name], [Start Date], [End Date], [Your Name], etc.) for missing details. Also list 1-2 optional adaptive questions in clarificationQuestions that could further personalize the draft if the user wishes.
-2. Only set status to "needs_clarification" if the request is too vague or empty to know what to write (e.g. "Hi", "Help me write an email" with no subject or purpose).`;
+${clarificationAnswers ? `\nUser's Answers to Clarification Questions:\n"""\n${clarificationAnswers}\n"""` : ''}`;
       }
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: userPromptText,
-        config: {
-          systemInstruction: PRODUCTION_SYSTEM_PROMPT,
-          responseMimeType: 'application/json',
-          responseSchema: EMAIL_RESPONSE_SCHEMA,
-          temperature: 0.4,
-        },
-      });
+      const aiDraft = await generateWithFallbackModels(userPromptText, 0.4);
+      if (aiDraft) {
+        return res.json(aiDraft);
+      }
 
-      const rawText = response.text || '{}';
-      const parsed = JSON.parse(rawText);
-      res.json(parsed);
-    } catch (error: any) {
-      console.error('Error in /api/generate:', error);
-      res.status(500).json({
-        error: error?.message || 'Failed to generate communication draft.',
+      // Guaranteed Production Composer Fallback if upstream models are 503 / unavailable
+      const fallbackDraft = composeStructuredDraft({
+        mode,
+        formData,
+        quickPrompt,
+        clarificationAnswers,
       });
+      return res.json(fallbackDraft);
+    } catch (error: any) {
+      console.error('Error in /api/generate, using composer fallback:', error);
+      const fallbackDraft = composeStructuredDraft({
+        mode,
+        formData,
+        quickPrompt,
+        clarificationAnswers,
+      });
+      return res.json(fallbackDraft);
     }
   });
 
   app.post('/api/refine', async (req, res) => {
-    try {
-      const { currentDraft, action, customInstruction, tone, length, language } = req.body;
-      const ai = getAiClient();
+    const {
+      currentDraft,
+      action = 'formal',
+      customInstruction,
+      tone,
+      length,
+      language,
+    } = req.body || {};
 
+    try {
       const actionDescriptions: Record<string, string> = {
-        shorten: 'Make it shorter: preserve meaning and key points while reducing length and removing any non-essential words.',
-        formal: 'Make it more professional and formal: improve clarity, structure, and executive formality.',
-        persuasive: 'Make it stronger and more persuasive: emphasize value and clear evidence without inventing achievements or exaggerating.',
-        warmer: 'Make it warmer: increase natural friendliness and personability while remaining professionally appropriate.',
-        confident: 'Make it more confident: use assertive, direct language without arrogance or fabrication.',
-        simpler: 'Make it simpler: use clearer vocabulary and shorter, easy-to-scan sentences.',
-        human: 'Make it more natural and human: remove robotic, stiff, or overly formulaic phrasing.',
-        grammar: 'Fix grammar and flow only: polish grammar, punctuation, and sentence transitions without changing the core wording unnecessarily.',
+        shorten:
+          'Make it shorter: preserve meaning and key points while reducing length and removing any non-essential words.',
+        formal:
+          'Make it more professional and formal: improve clarity, structure, and executive formality.',
+        persuasive:
+          'Make it stronger and more persuasive: emphasize value and clear evidence without inventing achievements or exaggerating.',
+        warmer:
+          'Make it warmer: increase natural friendliness and personability while remaining professionally appropriate.',
+        confident:
+          'Make it more confident: use assertive, direct language without arrogance or fabrication.',
+        simpler:
+          'Make it simpler: use clearer vocabulary and shorter, easy-to-scan sentences.',
+        human:
+          'Make it more natural and human: remove robotic, stiff, or overly formulaic phrasing.',
+        grammar:
+          'Fix grammar and flow only: polish grammar, punctuation, and sentence transitions without changing the core wording unnecessarily.',
       };
 
       const instructionText =
@@ -367,25 +343,27 @@ Target Controls:
 Revision Instruction:
 ${instructionText}`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          systemInstruction: PRODUCTION_SYSTEM_PROMPT,
-          responseMimeType: 'application/json',
-          responseSchema: EMAIL_RESPONSE_SCHEMA,
-          temperature: 0.35,
-        },
-      });
+      const aiRefined = await generateWithFallbackModels(prompt, 0.35);
+      if (aiRefined) {
+        return res.json(aiRefined);
+      }
 
-      const rawText = response.text || '{}';
-      const parsed = JSON.parse(rawText);
-      res.json(parsed);
-    } catch (error: any) {
-      console.error('Error in /api/refine:', error);
-      res.status(500).json({
-        error: error?.message || 'Failed to refine draft.',
+      const fallbackRefined = refineStructuredDraftLocally({
+        currentDraft,
+        action,
+        customInstruction,
+        tone,
       });
+      return res.json(fallbackRefined);
+    } catch (error: any) {
+      console.error('Error in /api/refine, using local refinement fallback:', error);
+      const fallbackRefined = refineStructuredDraftLocally({
+        currentDraft,
+        action,
+        customInstruction,
+        tone,
+      });
+      return res.json(fallbackRefined);
     }
   });
 

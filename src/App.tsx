@@ -28,6 +28,10 @@ import {
 } from './types';
 import { ManuscriptPane } from './components/ManuscriptPane';
 import { SenderProfileModal } from './components/SenderProfileModal';
+import {
+  composeStructuredDraft,
+  refineStructuredDraftLocally,
+} from './lib/mailComposerEngine';
 
 const DEFAULT_SENDER: SenderProfile = {
   senderName: 'Arjun Mehta',
@@ -247,8 +251,15 @@ export default function App() {
           },
         ]);
       }
-    } catch (err: any) {
-      setError(err.message || 'An unexpected error occurred.');
+    } catch {
+      const fallback = composeStructuredDraft({
+        mode: activeMode === 'templates' ? 'create' : activeMode,
+        formData,
+        quickPrompt,
+        clarificationAnswers,
+      });
+      setCurrentDraft(fallback);
+      setSelectedSubjectIndex(0);
     } finally {
       setIsLoading(false);
     }
@@ -280,8 +291,14 @@ export default function App() {
       }
 
       setCurrentDraft(data);
-    } catch (err: any) {
-      setError(err.message || 'Failed to refine draft.');
+    } catch {
+      const fallback = refineStructuredDraftLocally({
+        currentDraft,
+        action: actionKey,
+        customInstruction,
+        tone: formData.tone,
+      });
+      setCurrentDraft(fallback);
     } finally {
       setIsRefining(false);
     }

@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import { refineStructuredDraftLocally } from '../src/lib/mailComposerEngine';
 
 const PRODUCTION_SYSTEM_PROMPT = `You are AI Mail & Application Writer, an expert professional communication assistant.
 Preserve all original facts, names, dates, and square-bracket placeholders when refining or translating a draft. Never invent qualifications, statistics, or claims.`;
@@ -54,86 +55,85 @@ const EMAIL_RESPONSE_SCHEMA = {
   ],
 };
 
+const MODEL_CANDIDATES = [
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+  'gemini-3.1-flash-lite',
+];
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const {
+    currentDraft,
+    action = 'formal',
+    customInstruction,
+    tone,
+    length,
+    language,
+  } = req.body || {};
+
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({
-        error: 'GEMINI_API_KEY environment variable is not configured in Vercel Project Settings.',
-      });
-    }
-
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-
-    const { currentDraft, action, customInstruction, tone, length, language } = req.body || {};
-
-    const actionDescriptions: Record<string, string> = {
-      shorten:
-        'Make it shorter: preserve meaning and key points while reducing length and removing any non-essential words.',
-      formal:
-        'Make it more professional and formal: improve clarity, structure, and executive formality.',
-      persuasive:
-        'Make it stronger and more persuasive: emphasize value and clear evidence without inventing achievements or exaggerating.',
-      warmer:
-        'Make it warmer: increase natural friendliness and personability while remaining professionally appropriate.',
-      confident:
-        'Make it more confident: use assertive, direct language without arrogance or fabrication.',
-      simpler:
-        'Make it simpler: use clearer vocabulary and shorter, easy-to-scan sentences.',
-      human:
-        'Make it more natural and human: remove robotic, stiff, or overly formulaic phrasing.',
-      grammar:
-        'Fix grammar and flow only: polish grammar, punctuation, and sentence transitions without changing the core wording unnecessarily.',
-    };
-
-    const instructionText =
-      customInstruction ||
-      actionDescriptions[action] ||
-      `Refine the draft according to: ${action}`;
+    const apiKeys = [
+      process.env.GEMINI_API_KEY,
+      process.env.SECONDARY_GEMINI_API_KEY,
+      process.env.DRAFT_API_KEY,
+    ]
+      .map((k) => (k || '').trim())
+      .filter((k) => k && k !== 'MY_GEMINI_API_KEY' && k !== 'MY_SECONDARY_GEMINI_API_KEY');
 
     const prompt = `MODE: Targeted Draft Revision
-Revise the existing draft below according to the user's specific instruction.
-CRITICAL: Preserve all existing facts, names, dates, and square-bracket placeholders. Never invent new qualifications, statistics, or claims.
-
 Current Draft JSON:
 ${JSON.stringify(currentDraft, null, 2)}
+Tone: ${tone || 'Professional'} | Length: ${length || 'Standard'} | Language: ${language || 'English'}
+Instruction: ${customInstruction || action}`;
 
-Target Controls:
-- Tone: ${tone || 'Professional'}
-- Length: ${length || 'Appropriate to content'}
-- Language: ${language || 'English'}
+    for (const apiKey of apiKeys) {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: { 'User-Agent': 'aistudio-build' },
+        },
+      });
 
-Revision Instruction:
-${instructionText}`;
+      for (const modelName of MODEL_CANDIDATES) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: prompt,
+            config: {
+              systemInstruction: PRODUCTION_SYSTEM_PROMPT,
+              responseMimeType: 'application/json',
+              responseSchema: EMAIL_RESPONSE_SCHEMA,
+              temperature: 0.35,
+            },
+          });
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        systemInstruction: PRODUCTION_SYSTEM_PROMPT,
-        responseMimeType: 'application/json',
-        responseSchema: EMAIL_RESPONSE_SCHEMA,
-        temperature: 0.35,
-      },
+          if (response.text?.trim()) {
+            return res.status(200).json(JSON.parse(response.text));
+          }
+        } catch {
+          // Continue to next model / key
+        }
+      }
+    }
+
+    const fallbackRefined = refineStructuredDraftLocally({
+      currentDraft,
+      action,
+      customInstruction,
+      tone,
     });
-
-    const parsed = JSON.parse(response.text || '{}');
-    return res.status(200).json(parsed);
-  } catch (error: any) {
-    console.error('Error in /api/refine:', error);
-    return res.status(500).json({
-      error: error?.message || 'Failed to refine draft.',
+    return res.status(200).json(fallbackRefined);
+  } catch {
+    const fallbackRefined = refineStructuredDraftLocally({
+      currentDraft,
+      action,
+      customInstruction,
+      tone,
     });
+    return res.status(200).json(fallbackRefined);
   }
 }
