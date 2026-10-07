@@ -1,0 +1,6 @@
+{
+  "name": "AI Mail & Application Writer",
+  "description": "Professional communication studio for crafting tailored emails, job applications, cover letters, leave requests, and formal correspondence with adaptive questioning and zero-fabrication accuracy.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
